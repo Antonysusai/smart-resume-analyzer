@@ -153,6 +153,7 @@ class ResumeNLPExtractor:
         entities.education = self._extract_education(raw_text, doc)
         entities.experience = self._extract_experience(raw_text, doc)
         entities.certifications = self._extract_certifications(raw_text)
+        entities.languages = self._extract_languages(raw_text)
         entities.summary = self._extract_summary(raw_text)
         entities.total_experience_years = self._estimate_experience_years(
             entities.experience
@@ -313,6 +314,35 @@ class ResumeNLPExtractor:
                 if 5 < len(clean) < 150:
                     certs.append(clean)
         return list(set(certs))[:10]
+
+    def _extract_languages(self, text: str) -> list[str]:
+        """Extract language mentions, with special care for German CEFR levels."""
+        languages = []
+        language_section = re.search(
+            r"(?:languages|language skills|sprachkenntnisse|sprachen)[:\s]*\n?(.*?)(?:\n\n|\Z)",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        candidates = []
+        if language_section:
+            candidates.extend(language_section.group(1).splitlines())
+        candidates.extend(
+            match.group(0)
+            for match in re.finditer(
+                r"\b(?:German|Deutsch|English|Englisch)\b[^.\n,;]*(?:A1|A2|B1|B2|C1|C2|native|fluent|business|professional|basic|intermediate|advanced|Muttersprache|verhandlungssicher)?",
+                text,
+                re.IGNORECASE,
+            )
+        )
+
+        for candidate in candidates:
+            clean = " ".join(candidate.strip(" -•\t").split())
+            if not clean or len(clean) > 120:
+                continue
+            if re.search(r"\b(german|deutsch|english|englisch)\b", clean, re.IGNORECASE):
+                languages.append(clean)
+
+        return sorted(set(languages))[:10]
 
     # ──────────────────────────────────────────────────────────────────────────
     # Summary extraction

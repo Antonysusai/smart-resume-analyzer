@@ -145,8 +145,7 @@ if mode == "Single Resume":
                 )
 
             if response.status_code == 200:
-                result = response.json()
-                _render_results(result)
+                st.session_state["single_result"] = response.json()
             else:
                 st.error(f"Error {response.status_code}: {response.json().get('detail', 'Unknown error')}")
     elif not job_description:
@@ -179,8 +178,7 @@ else:
                 )
 
             if response.status_code == 200:
-                result = response.json()
-                _render_batch_results(result)
+                st.session_state["batch_result"] = response.json()
             else:
                 st.error(f"Error: {response.text}")
 
@@ -190,6 +188,25 @@ else:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _render_results(result: dict):
+    if result.get("status") == "rejected" and "score" not in result:
+        st.divider()
+        st.error(f"Rejected by hard filter: {result.get('rejection_reason', 'Requirement not met')}")
+        if result.get("failed_criteria"):
+            st.subheader("Failed Criteria")
+            for item in result["failed_criteria"]:
+                st.markdown(f"- {item}")
+        if result.get("critical_missing_skills"):
+            st.subheader("Critical Missing Skills")
+            st.write(", ".join(result["critical_missing_skills"]))
+        if result.get("risk_flags"):
+            st.subheader("Risk Flags")
+            for item in result["risk_flags"]:
+                st.markdown(f"- {item}")
+        if result.get("diagnostics"):
+            st.subheader("Diagnostics")
+            st.json(result["diagnostics"])
+        return
+
     entities = result["entities"]
     score = result["score"]
     file_info = result["file_info"]
@@ -213,36 +230,62 @@ def _render_results(result: dict):
     with h4:
         st.metric("Processing Time", f"{result['processing_time_ms']:.0f}ms")
 
+    confidence = result.get("confidence") or score.get("confidence")
+    if confidence:
+        st.caption(f"Confidence: {confidence['level'].title()} ({confidence['score']*100:.1f}%)")
+
+    if score.get("status") == "rejected":
+        st.error(f"Rejected by hard filter: {score.get('rejection_reason', 'Requirement not met')}")
+    else:
+        st.success("Passed hard filters and moved to scoring")
+
     st.divider()
 
-    # ── Candidate Info ─────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Scores", "👤 Profile", "🛠 Skills", "💡 Insights"])
+    # ── German ATS + Recruiter flow ───────────────────────────────────────────
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "ATS Gate", "Score", "Recruiter View", "Improvement Plan", "Summary"
+    ])
 
     with tab1:
-        _render_score_charts(score)
-
-    with tab2:
+        st.subheader("ATS Gate")
+        st.success("Accepted: passed hard filters")
+        st.write(f"**Reason:** {result.get('hiring_decision', {}).get('reason', 'Meets core hard-filter requirements')}")
         _render_profile(entities, file_info)
 
+    with tab2:
+        _render_score_charts(score)
+
     with tab3:
-        _render_skills(entities, score, skills_by_cat)
+        _render_insights(score)
 
     with tab4:
-        _render_insights(score)
+        _render_improvement_plan(result, score, skills_by_cat)
+
+    with tab5:
+        _render_summary(result, score)
 
 
 def _render_score_charts(score: dict):
     col1, col2 = st.columns(2)
+    breakdown = score.get("score_breakdown") or {
+        "skills": score["skill_match_score"],
+        "experience": score["experience_score"],
+        "language": score.get("language_score", 0),
+        "achievements": score.get("achievement_score", 0),
+        "formatting": score.get("formatting_score", score.get("completeness_score", 0)),
+        "recruiter_alignment": score.get("recruiter_alignment_score", 0),
+    }
 
     with col1:
         # Radar chart
-        categories = ["Skills", "Experience", "Education", "Completeness", "Semantic Fit"]
+        categories = ["Skills", "Experience", "German", "Achievements", "Formatting", "Recruiter"]
         values = [
-            score["skill_match_score"],
-            score["experience_score"],
-            score["education_score"],
-            score["completeness_score"],
-            score["semantic_similarity"] * 100,
+            breakdown["skills"],
+            breakdown["experience"],
+            breakdown["language"],
+            breakdown["achievements"],
+            breakdown["formatting"],
+            breakdown["recruiter_alignment"],
         ]
         fig = go.Figure(data=go.Scatterpolar(
             r=values + [values[0]],
@@ -265,7 +308,7 @@ def _render_score_charts(score: dict):
             x=values,
             y=categories,
             orientation="h",
-            marker_color=["#0d6efd", "#198754", "#ffc107", "#0dcaf0", "#6f42c1"],
+            marker_color=["#0d6efd", "#198754", "#6f42c1", "#0dcaf0", "#ffc107", "#6c757d"],
             text=[f"{v:.1f}" for v in values],
             textposition="inside",
         ))
@@ -302,6 +345,7 @@ def _render_profile(entities: dict, file_info: dict):
         st.write(f"**Location:** {entities.get('location') or '—'}")
         st.write(f"**LinkedIn:** {entities.get('linkedin') or '—'}")
         st.write(f"**GitHub:** {entities.get('github') or '—'}")
+        st.write(f"**Languages:** {', '.join(entities.get('languages', [])) or '—'}")
 
         st.subheader("Document Info")
         st.write(f"**File:** {file_info['filename']}")
@@ -340,6 +384,17 @@ def _render_skills(entities: dict, score: dict, skills_by_cat: dict):
     )
     st.markdown(missing or "_None missing_", unsafe_allow_html=True)
 
+    if score.get("optional_missing_skills"):
+        st.subheader(f"Optional Missing Skills ({len(score['optional_missing_skills'])})")
+        optional = " ".join(
+            f'<span class="missing-chip">{s}</span>' for s in score["optional_missing_skills"]
+        )
+        st.markdown(optional, unsafe_allow_html=True)
+
+    if score.get("skill_gap_analysis"):
+        st.subheader("Skill Gap Priority")
+        st.dataframe(pd.DataFrame(score["skill_gap_analysis"]), use_container_width=True, hide_index=True)
+
     st.subheader("Skills by Category")
     if skills_by_cat:
         for cat, skills in skills_by_cat.items():
@@ -355,25 +410,86 @@ def _render_skills(entities: dict, score: dict, skills_by_cat: dict):
 
 
 def _render_insights(score: dict):
-    col1, col2 = st.columns(2)
+    insights = score.get("recruiter_insights", {})
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.subheader("💪 Strengths")
-        for s in score.get("strengths", []):
-            st.markdown(f'<p class="strength-item">✔ {s}</p>', unsafe_allow_html=True)
-        if not score.get("strengths"):
-            st.info("No major strengths detected.")
+        st.subheader("First Impression")
+        for item in insights.get("first_impression", []):
+            st.markdown(f"- {item}")
+        if not insights.get("first_impression"):
+            st.info("No first impression signals detected.")
 
     with col2:
-        st.subheader("⚠ Gaps")
-        for g in score.get("gaps", []):
-            st.markdown(f'<p class="gap-item">✘ {g}</p>', unsafe_allow_html=True)
-        if not score.get("gaps"):
-            st.success("No significant gaps found!")
+        st.subheader("Red Flags")
+        for item in insights.get("red_flags", score.get("gaps", [])):
+            st.markdown(f'<p class="gap-item">- {item}</p>', unsafe_allow_html=True)
+        if not insights.get("red_flags") and not score.get("gaps"):
+            st.success("No immediate red flags found.")
 
-    st.subheader("📋 Recommendations")
-    for i, rec in enumerate(score.get("recommendations", []), 1):
+    with col3:
+        st.subheader("Strength Signals")
+        for item in insights.get("strengths", score.get("strengths", [])):
+            st.markdown(f'<p class="strength-item">✔ {item}</p>', unsafe_allow_html=True)
+        if not insights.get("strengths") and not score.get("strengths"):
+            st.info("No major strengths detected.")
+
+    if score.get("achievement_analysis", {}).get("examples"):
+        st.subheader("Achievement Signals")
+        for example in score["achievement_analysis"]["examples"]:
+            st.markdown(f"- {example}")
+
+    if "shortlist_probability" in insights:
+        st.metric("Shortlist Probability", f"{insights['shortlist_probability']*100:.1f}%")
+
+    if score.get("recruiter_decision"):
+        st.subheader("Final Recruiter Decision")
+        st.json(score["recruiter_decision"])
+
+    if score.get("confidence"):
+        st.subheader("Confidence")
+        st.json(score["confidence"])
+
+    if score.get("hiring_decision"):
+        st.subheader("Hiring Decision")
+        st.json(score["hiring_decision"])
+
+
+def _render_improvement_plan(result: dict, score: dict, skills_by_cat: dict):
+    st.subheader("Prioritized Recommendations")
+    recommendations = result.get("recommendations") or score.get("recommendations", [])
+    for i, rec in enumerate(recommendations, 1):
         st.markdown(f"{i}. {rec}")
+    if not recommendations:
+        st.info("No recommendations generated.")
+
+    if result.get("issues") or score.get("issues"):
+        st.subheader("Severity Ranked Issues")
+        st.dataframe(pd.DataFrame(result.get("issues") or score.get("issues")), use_container_width=True, hide_index=True)
+
+    st.subheader("Skill Gaps")
+    if score.get("skill_gap_analysis"):
+        st.dataframe(pd.DataFrame(score["skill_gap_analysis"]), use_container_width=True, hide_index=True)
+    else:
+        st.success("No prioritized skill gaps detected.")
+
+    if skills_by_cat:
+        st.subheader("Extracted Skills by Category")
+        for cat, skills in skills_by_cat.items():
+            with st.expander(f"{cat.replace('_', ' ').title()} ({len(skills)})"):
+                st.write(", ".join(skills))
+
+
+def _render_summary(result: dict, score: dict):
+    st.subheader("Job-Fit Summary")
+    st.info(result.get("summary") or score.get("summary", "No summary generated."))
+    if result.get("hiring_decision"):
+        st.subheader("Final Hiring Verdict")
+        st.json(result["hiring_decision"])
+    if result.get("achievement_examples"):
+        st.subheader("Achievement Examples")
+        for example in result["achievement_examples"]:
+            st.markdown(f"- {example}")
 
 
 def _render_batch_results(result: dict):
@@ -399,3 +515,9 @@ def _render_batch_results(result: dict):
             labels={"overall_score": "Score", "filename": "Candidate"},
         )
         st.plotly_chart(fig, use_container_width=True)
+
+
+if mode == "Single Resume" and st.session_state.get("single_result"):
+    _render_results(st.session_state["single_result"])
+elif mode == "Batch Ranking" and st.session_state.get("batch_result"):
+    _render_batch_results(st.session_state["batch_result"])

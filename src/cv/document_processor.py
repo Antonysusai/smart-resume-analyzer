@@ -160,7 +160,7 @@ class DocumentProcessor:
             cv2.THRESH_BINARY, 11, 2
         )
         # Morphological close to fix broken characters
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         quality = self._estimate_quality(cleaned)
         return cleaned, quality
