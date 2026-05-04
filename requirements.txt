@@ -14,8 +14,9 @@ imutils==0.5.4
 
 # ── NLP ───────────────────────────────────────────────────────────────────────
 spacy==3.7.4
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 transformers==4.40.1
-torch>=2.1.0,<2.4.0
+torch==2.1.2
 sentence-transformers==2.7.0
 nltk==3.8.1
 textstat==0.7.3
@@ -36,10 +37,9 @@ pdfplumber==0.11.1
 streamlit==1.35.0
 plotly==5.22.0
 streamlit-lottie==0.0.5
+requests==2.31.0
 
-# ── Dev / Testing ─────────────────────────────────────────────────────────────
-pytest==8.2.0
-pytest-asyncio==0.23.7
-httpx==0.27.0
+# ── Utils ─────────────────────────────────────────────────────────────────────
 python-dotenv==1.0.1
 loguru==0.7.2
+httpx==0.27.0
